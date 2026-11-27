@@ -1,0 +1,5 @@
+<resources>
+    <color name="midnight">#0A0614</color>
+    <color name="launcher_gradient_start">#7B2FF7</color>
+    <color name="launcher_gradient_end">#E026A0</color>
+</resources>

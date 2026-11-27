@@ -1,0 +1,14 @@
+<resources>
+    <style name="Theme.MSJ" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/midnight</item>
+        <item name="android:statusBarColor">@color/midnight</item>
+        <item name="android:navigationBarColor">@color/midnight</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.MSJ.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/midnight</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.MSJ</item>
+    </style>
+</resources>
