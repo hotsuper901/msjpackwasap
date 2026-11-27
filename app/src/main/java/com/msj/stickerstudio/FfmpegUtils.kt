@@ -3,7 +3,6 @@ package com.msj.stickerstudio
 import android.content.Context
 import android.net.Uri
 import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.arthenica.ffmpegkit.FFmpegSessionCompleteCallback
 import com.arthenica.ffmpegkit.LogCallback
 import com.arthenica.ffmpegkit.ReturnCode
@@ -126,12 +125,11 @@ object FfmpegUtils {
         run(cmd, null, outFile)
     }
 
-    /** Maps a content:// URI to an ffmpeg-safe path, falling back to a cache copy. */
-    private fun resolveInput(context: Context, inputUri: Uri): String? =
-        FFmpegKitConfig.getSafParameterForRead(context, inputUri) ?: run {
-            val tmp = File(context.cacheDir, "input_${System.currentTimeMillis()}.mp4")
-            if (WhatsAppHandler.copyUriToFile(context, inputUri, tmp)) tmp.absolutePath else null
-        }
+    /** Copies the picked video to a plain cache file so FFmpeg always gets a vanilla path. */
+    private fun resolveInput(context: Context, inputUri: Uri): String? {
+        val tmp = File(context.cacheDir, "in_${System.currentTimeMillis()}.mp4")
+        return if (WhatsAppHandler.copyUriToFile(context, inputUri, tmp)) tmp.absolutePath else null
+    }
 
     private suspend fun run(
         command: String,
@@ -175,15 +173,32 @@ object FfmpegUtils {
             val tail = synchronized(logBuf) { logBuf.takeLast(6) }
                 .joinToString("\n")
                 .take(700)
-            JobResult(
-                false,
-                if (tail.isBlank()) {
-                    "Conversion failed (code $returnCode). Try another format or quality."
-                } else {
-                    "Conversion failed (code $returnCode):\n$tail"
-                },
-                null
-            )
+            when {
+                tail.isNotBlank() -> JobResult(
+                    false,
+                    "Conversion failed (code $returnCode):\n$tail",
+                    null
+                )
+                else -> {
+                    // No log output at all — check whether the engine itself runs.
+                    val probe = FFmpegKit.execute("-hide_banner -version")
+                    val probeCode = probe.returnCode
+                    if (ReturnCode.isSuccess(probeCode)) {
+                        JobResult(
+                            false,
+                            "Conversion failed (code $returnCode) with no engine output.\n" +
+                                "The engine is fine — this video may be unreadable. Try another clip.",
+                            null
+                        )
+                    } else {
+                        JobResult(
+                            false,
+                            "FFmpeg engine check failed (code $probeCode). Reinstall the app and try again.",
+                            null
+                        )
+                    }
+                }
+            }
         }
     }
 }
