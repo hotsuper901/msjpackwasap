@@ -1,5 +1,6 @@
 package com.msj.stickerstudio.ui.screens
 
+import android.app.Activity
 import android.content.Intent
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -60,7 +61,7 @@ fun ConvertScreen(navController: NavHostController) {
         val pid = pendingPackId
         val file = doneFile
         if (pid != null && file != null) {
-            state = if (result.resultCode == ActivityResult.RESULT_OK) {
+            state = if (result.resultCode == Activity.RESULT_OK) {
                 ConvertState.Success(
                     file, pid, false,
                     "Added to WhatsApp \u2714\nOpen a chat \u2192 sticker picker \u2192 \u2295 \u2192 My Stickers.\n" +
