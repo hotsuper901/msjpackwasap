@@ -132,14 +132,14 @@ fun HomeScreen(navController: NavHostController) {
         FeatureCard(
             icon = Icons.Rounded.MusicNote,
             title = "Music Sticker",
-            desc = "Keep the sound of the clip \u2014 WebM with VP9 video + Opus audio, ready to share.",
+            desc = "Keep the sound of the clip \u2014 WebM with VP8 video + Vorbis audio, ready to share.",
             accent = Cyan
         )
         Spacer(Modifier.height(12.dp))
         FeatureCard(
             icon = Icons.Rounded.GraphicEq,
             title = "Ringtone Extract",
-            desc = "Pull the soundtrack out of any video as a high-quality MP3.",
+            desc = "Pull the soundtrack out of any video as a high-quality M4A (AAC).",
             accent = Gold
         )
         Spacer(Modifier.height(12.dp))

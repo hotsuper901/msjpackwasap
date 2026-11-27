@@ -16,6 +16,11 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         vectorDrawables { useSupportLibrary = true }
+
+        // The FFmpeg fork ships arm64-v8a + x86_64 natives only.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -93,9 +98,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // FFmpeg full build: libwebp (stickers) + libvpx-vp9 (music stickers)
-    // + libopus + libmp3lame (ringtone) — every encoder the app uses.
-    implementation("com.arthenica:ffmpeg-kit-full:6.0.LTS")
+    // Maintained FFmpegKit fork (16KB page support for Android 15+, SDK 35).
+    // video variant carries libwebp (sticker encoding) + libvpx (music sticker
+    // video) + libvorbis (music sticker audio); ringtone uses the native AAC
+    // encoder, so no external MP3 lib is needed.
+    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-video:6.0.4")
 
     // Animated WebP / GIF preview rendering
     implementation("io.coil-kt:coil-compose:2.5.0")

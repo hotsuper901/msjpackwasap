@@ -59,8 +59,8 @@ fun AboutScreen() {
             Spacer(Modifier.height(10.dp))
             Feature(Icons.Rounded.AutoAwesome, "Animated WebP stickers", "Native WhatsApp sticker keyboard support with tray icon.")
             Feature(Icons.Rounded.Movie, "GIF stickers", "Classic looping GIF format, also registered as sticker packs.")
-            Feature(Icons.Rounded.MusicNote, "Music stickers", "WebM with VP9 video + Opus audio \u2014 the clip keeps its sound.")
-            Feature(Icons.Rounded.GraphicEq, "Ringtone extraction", "One tap to pull a 192 kbps MP3 soundtrack out of any video.")
+            Feature(Icons.Rounded.MusicNote, "Music stickers", "WebM with VP8 video + Vorbis audio \u2014 the clip keeps its sound.")
+            Feature(Icons.Rounded.GraphicEq, "Ringtone extraction", "One tap to pull a 192 kbps M4A (AAC) soundtrack out of any video.")
             Feature(Icons.Rounded.Tune, "Full control", "Size, frame rate, quality, emojis, pack name \u2014 all yours.")
         }
 

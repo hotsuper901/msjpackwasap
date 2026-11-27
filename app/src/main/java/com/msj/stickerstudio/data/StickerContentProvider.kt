@@ -9,18 +9,20 @@ import android.database.MatrixCursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.text.TextUtils
+import com.msj.stickerstudio.PackStore
 import com.msj.stickerstudio.WhatsAppHandler
 import java.io.File
 
 /**
- * Serves sticker assets to WhatsApp across every route the client actually queries:
+ * Serves sticker pack data to WhatsApp over the official third-party contract:
  *
- *  - /metadata                            provider capability probe
- *  - /tray/{packId}                       tray icon URI we stored in the pack row
- *  - /sticker_pack_tray_icon/{packId}     legacy tray icon route WhatsApp may normalize to
- *  - /stickers/{packId}                   enumerates sticker file names + emojis + sizes
- *  - /stickers_asset/{packId}/{name}      binary sticker data (WhatsApp's standard path)
- *  - /sticker/{packId}/{name}             binary data via our own stored URIs
+ *  - /metadata                    all packs (id, name, publisher, icon, flags)
+ *  - /metadata/{packId}           one pack — WhatsApp's ENABLE_STICKER_PACK entry point
+ *  - /stickers/{packId}           sticker file names + emojis + accessibility labels
+ *  - /stickers_asset/{packId}/{name}   binary sticker data (AssetFileDescriptor)
+ *  - /sticker/{packId}/{name}     binary data via our own stored URIs
+ *  - /sticker_pack_tray_icon/{packId}  tray icon URI stored in the pack row
+ *  - /tray/{packId}               legacy tray icon route
  */
 class StickerContentProvider : ContentProvider() {
 
@@ -28,15 +30,54 @@ class StickerContentProvider : ContentProvider() {
         const val AUTHORITY = "com.msj.stickerstudio.stickercontentprovider"
 
         private const val MATCHER_METADATA = 0
-        private const val MATCHER_TRAY = 1
-        private const val MATCHER_TRAY_LEGACY = 2
-        private const val MATCHER_STICKERS = 3
-        private const val MATCHER_STICKER_ASSET = 4
-        private const val MATCHER_STICKER = 5
+        private const val MATCHER_METADATA_ID = 1
+        private const val MATCHER_TRAY = 2
+        private const val MATCHER_TRAY_LEGACY = 3
+        private const val MATCHER_STICKERS = 4
+        private const val MATCHER_STICKER_ASSET = 5
+        private const val MATCHER_STICKER = 6
+
+        private const val STICKER_PACK_IDENTIFIER_IN_QUERY = "sticker_pack_identifier"
+        private const val STICKER_PACK_NAME_IN_QUERY = "sticker_pack_name"
+        private const val STICKER_PACK_PUBLISHER_IN_QUERY = "sticker_pack_publisher"
+        private const val STICKER_PACK_ICON_IN_QUERY = "sticker_pack_icon"
+        private const val ANDROID_APP_DOWNLOAD_LINK_IN_QUERY = "android_play_store_link"
+        private const val IOS_APP_DOWNLOAD_LINK_IN_QUERY = "ios_app_download_link"
+        private const val PUBLISHER_EMAIL = "sticker_pack_publisher_email"
+        private const val PUBLISHER_WEBSITE = "sticker_pack_publisher_website"
+        private const val PRIVACY_POLICY_WEBSITE = "sticker_pack_privacy_policy_website"
+        private const val LICENSE_AGREEMENT_WEBSITE = "sticker_pack_license_agreement_website"
+        private const val IMAGE_DATA_VERSION = "image_data_version"
+        private const val AVOID_CACHE = "whatsapp_will_not_cache_stickers"
+        private const val ANIMATED_STICKER_PACK = "animated_sticker_pack"
 
         private const val STICKER_FILE_NAME = "sticker_file_name"
         private const val STICKER_FILE_EMOJI = "sticker_emoji"
         private const val STICKER_FILE_SIZE = "sticker_size"
+        private const val STICKER_ACCESSIBILITY_TEXT = "sticker_accessibility_text"
+
+        private val METADATA_COLUMNS = arrayOf(
+            STICKER_PACK_IDENTIFIER_IN_QUERY,
+            STICKER_PACK_NAME_IN_QUERY,
+            STICKER_PACK_PUBLISHER_IN_QUERY,
+            STICKER_PACK_ICON_IN_QUERY,
+            ANDROID_APP_DOWNLOAD_LINK_IN_QUERY,
+            IOS_APP_DOWNLOAD_LINK_IN_QUERY,
+            PUBLISHER_EMAIL,
+            PUBLISHER_WEBSITE,
+            PRIVACY_POLICY_WEBSITE,
+            LICENSE_AGREEMENT_WEBSITE,
+            IMAGE_DATA_VERSION,
+            AVOID_CACHE,
+            ANIMATED_STICKER_PACK
+        )
+
+        private val STICKER_COLUMNS = arrayOf(
+            STICKER_FILE_NAME,
+            STICKER_FILE_EMOJI,
+            STICKER_FILE_SIZE,
+            STICKER_ACCESSIBILITY_TEXT
+        )
 
         fun buildTrayUri(packId: String): Uri =
             Uri.Builder().scheme("content").authority(AUTHORITY)
@@ -49,6 +90,7 @@ class StickerContentProvider : ContentProvider() {
 
     private val uriMatcher = UriMatcher(UriMatcher.NO_MATCH).apply {
         addURI(AUTHORITY, "metadata", MATCHER_METADATA)
+        addURI(AUTHORITY, "metadata/*", MATCHER_METADATA_ID)
         addURI(AUTHORITY, "tray/*", MATCHER_TRAY)
         addURI(AUTHORITY, "sticker_pack_tray_icon/*", MATCHER_TRAY_LEGACY)
         addURI(AUTHORITY, "stickers/*", MATCHER_STICKERS)
@@ -59,7 +101,7 @@ class StickerContentProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
     override fun getType(uri: Uri): String = when (uriMatcher.match(uri)) {
-        MATCHER_METADATA -> "text/plain"
+        MATCHER_METADATA, MATCHER_METADATA_ID, MATCHER_STICKERS -> "text/plain"
         else -> "image/webp"
     }
 
@@ -106,8 +148,17 @@ class StickerContentProvider : ContentProvider() {
     ): Cursor? {
         return when (uriMatcher.match(uri)) {
         MATCHER_METADATA -> {
-            val cursor = MatrixCursor(arrayOf("metadata"))
-            cursor.addRow(arrayOf<Any>("metadata"))
+            val ctx = context ?: return null
+            val cursor = MatrixCursor(METADATA_COLUMNS)
+            PackStore.load(ctx).forEach { addPackRow(cursor, it) }
+            cursor
+        }
+
+        MATCHER_METADATA_ID -> {
+            val ctx = context ?: return null
+            val packId = uri.pathSegments.getOrNull(1) ?: return null
+            val cursor = MatrixCursor(METADATA_COLUMNS)
+            PackStore.find(ctx, packId)?.let { addPackRow(cursor, it) }
             cursor
         }
 
@@ -143,18 +194,42 @@ class StickerContentProvider : ContentProvider() {
 
     // ---------- helpers ----------
 
+    private fun addPackRow(cursor: MatrixCursor, r: PackStore.PackRecord) {
+        cursor.addRow(
+            arrayOf<Any>(
+                r.id,
+                r.name,
+                r.publisher,
+                buildTrayUri(r.id).toString(),
+                "",             // android_play_store_link
+                "",             // ios_app_download_link
+                "msj.stickerstudio@gmail.com",
+                "",             // publisher website
+                "",             // privacy policy
+                "",             // license agreement
+                "1",            // image_data_version
+                true,           // whatsapp_will_not_cache_stickers
+                r.animated      // animated_sticker_pack
+            )
+        )
+    }
+
     private fun enumerateStickers(uri: Uri): Cursor {
-        val ctx = context ?: return MatrixCursor(arrayOf(STICKER_FILE_NAME, STICKER_FILE_EMOJI, STICKER_FILE_SIZE))
+        val ctx = context ?: return MatrixCursor(STICKER_COLUMNS)
         val packId = uri.pathSegments.getOrNull(1)
-            ?: return MatrixCursor(arrayOf(STICKER_FILE_NAME, STICKER_FILE_EMOJI, STICKER_FILE_SIZE))
+            ?: return MatrixCursor(STICKER_COLUMNS)
+        val record = PackStore.find(ctx, packId)
+        val byName = record?.stickers?.associateBy { it.fileName } ?: emptyMap()
         val dir = WhatsAppHandler.stickerDir(ctx, packId)
-        val cursor = MatrixCursor(arrayOf(STICKER_FILE_NAME, STICKER_FILE_EMOJI, STICKER_FILE_SIZE))
+        val cursor = MatrixCursor(STICKER_COLUMNS)
         dir.listFiles()?.filter { it.isFile }?.forEach { file ->
+            val meta = byName[file.name]
             cursor.addRow(
                 arrayOf<Any>(
                     file.name,
-                    "\uD83D\uDE00",
-                    file.length()
+                    meta?.emojis?.takeIf { it.isNotBlank() } ?: "\uD83D\uDE00",
+                    file.length(),
+                    meta?.title?.takeIf { it.isNotBlank() } ?: "MSJ Sticker"
                 )
             )
         }

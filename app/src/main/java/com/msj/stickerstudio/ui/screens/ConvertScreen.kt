@@ -1,7 +1,10 @@
 package com.msj.stickerstudio.ui.screens
 
 import android.content.Intent
-import android.net.Uri
+import androidx.activity.compose.ManagedActivityResultLauncher
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -34,7 +37,12 @@ import kotlinx.coroutines.withContext
 
 private sealed interface ConvertState {
     data class Working(val progress: Int, val step: String) : ConvertState
-    data class Success(val file: File, val packId: String?, val info: String) : ConvertState
+    data class Success(
+        val file: File,
+        val packId: String?,
+        val pendingAdd: Boolean,
+        val info: String
+    ) : ConvertState
     data class Failure(val message: String) : ConvertState
 }
 
@@ -42,6 +50,31 @@ private sealed interface ConvertState {
 fun ConvertScreen(navController: NavHostController) {
     val context = LocalContext.current
     var state by remember { mutableStateOf<ConvertState>(ConvertState.Working(0, "Preparing FFmpeg\u2026")) }
+    var doneFile by remember { mutableStateOf<File?>(null) }
+    var pendingPackId by remember { mutableStateOf<String?>(null) }
+
+    // WhatsApp's official add-pack dialog result.
+    val addLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val pid = pendingPackId
+        val file = doneFile
+        if (pid != null && file != null) {
+            state = if (result.resultCode == ActivityResult.RESULT_OK) {
+                ConvertState.Success(
+                    file, pid, false,
+                    "Added to WhatsApp \u2714\nOpen a chat \u2192 sticker picker \u2192 \u2295 \u2192 My Stickers.\n" +
+                        "If it's not there yet, close and reopen WhatsApp once."
+                )
+            } else {
+                ConvertState.Success(
+                    file, pid, true,
+                    "Sticker pack is ready \u2014 tap ADD TO WHATSAPP to confirm adding it " +
+                        "to your sticker keyboard."
+                )
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         val uri = Session.inputUri
@@ -67,7 +100,24 @@ fun ConvertScreen(navController: NavHostController) {
                         return@LaunchedEffect
                     }
 
-                    state = ConvertState.Working(85, "Making tray icon\u2026")
+                    // WhatsApp packs only accept WebP assets, so a GIF pack injects an animated WebP twin.
+                    val packAsset = if (settings.format == OutputFormat.GIF) {
+                        state = ConvertState.Working(82, "Making WhatsApp WebP twin\u2026")
+                        val twin = File(exports, "$base-pack.webp")
+                        val twinConv = FfmpegUtils.convertToSticker(
+                            context, uri, OutputFormat.ANIMATED_WEBP,
+                            settings.size, settings.fps, settings.quality, twin
+                        ) { }
+                        if (!twinConv.success) {
+                            state = ConvertState.Failure(twinConv.message)
+                            return@LaunchedEffect
+                        }
+                        twin
+                    } else {
+                        stickerFile
+                    }
+
+                    state = ConvertState.Working(88, "Making tray icon\u2026")
                     val trayIcon = File(exports, "$base-tray.webp")
                     val tray = FfmpegUtils.makeTrayIcon(context, uri, trayIcon)
                     if (!tray.success) {
@@ -75,41 +125,50 @@ fun ConvertScreen(navController: NavHostController) {
                         return@LaunchedEffect
                     }
 
-                    state = ConvertState.Working(92, "Adding pack to WhatsApp\u2026")
-                    val added = WhatsAppHandler.addStickerPack(
+                    state = ConvertState.Working(94, "Registering pack with WhatsApp\u2026")
+                    val packId = java.util.UUID.randomUUID().toString()
+                    val added = WhatsAppHandler.preparePack(
                         context,
                         settings.packName,
                         trayIcon,
-                        listOf(Sticker(stickerFile, settings.emojis))
+                        listOf(Sticker(packAsset, settings.emojis)),
+                        animated = true,
+                        stickerTitle = settings.stickerTitle,
+                        packId = packId
                     )
                     if (!added.success) {
                         state = ConvertState.Failure(
-                            "Conversion worked but WhatsApp rejected the pack:\n${added.message}\n\n" +
-                                WhatsAppHandler.diagnose(context, "", trayIcon, stickerFile)
+                            "Conversion worked but the pack couldn't be prepared:\n${added.message}\n\n" +
+                                WhatsAppHandler.diagnose(context, packId, trayIcon, packAsset)
                         )
                         return@LaunchedEffect
                     }
-                    val registered = WhatsAppHandler.getStickerPacks(context)
-                        .any { it.id == added.message }
+
                     Session.lastOutput = stickerFile.absolutePath
                     Session.lastTray = trayIcon.absolutePath
-                    Session.lastPackId = added.message
+                    Session.lastPackId = added.packId
                     Session.lastOutputFormat = settings.format
+                    doneFile = stickerFile
+                    pendingPackId = added.packId
                     state = ConvertState.Success(
-                        stickerFile,
-                        added.message,
-                        if (registered) {
-                            "Added to WhatsApp \u2714\nOpen a chat \u2192 sticker picker \u2192 \u2295 \u2192 My Stickers.\n" +
-                                "If it's not there yet, force-stop WhatsApp once and reopen."
-                        } else {
-                            "Pack inserted but WhatsApp didn't register it.\nTap RETRY INJECTION, then force-stop " +
-                                "WhatsApp once and check \u2295 \u2192 My Stickers."
-                        }
+                        stickerFile, added.packId, true,
+                        "Sticker converted \u2014 confirm adding it to WhatsApp in the dialog."
                     )
+
+                    // Fire the official add flow — WhatsApp shows its confirmation dialog.
+                    val intent = added.intent
+                    if (intent != null) {
+                        runCatching { addLauncher.launch(intent) }.onFailure {
+                            state = ConvertState.Success(
+                                stickerFile, added.packId, true,
+                                "Sticker converted \u2014 tap ADD TO WHATSAPP to add it to your sticker keyboard."
+                            )
+                        }
+                    }
                 }
 
                 OutputFormat.MUSIC_STICKER -> {
-                    state = ConvertState.Working(8, "Encoding VP9 video + Opus audio\u2026")
+                    state = ConvertState.Working(8, "Encoding VP8 video + Vorbis audio\u2026")
                     val outFile = File(exports, "$base-music.webm")
                     val conv = FfmpegUtils.convertToMusicSticker(
                         context, uri, settings.size, settings.fps, settings.withMusic, outFile
@@ -120,12 +179,16 @@ fun ConvertScreen(navController: NavHostController) {
                     }
                     Session.lastOutput = outFile.absolutePath
                     Session.lastOutputFormat = settings.format
-                    state = ConvertState.Success(outFile, null, "Music sticker ready. Share it to WhatsApp or any chat.")
+                    state = ConvertState.Success(
+                        outFile, null, false,
+                        "Music sticker ready \u2014 it plays the clip's sound. Share it or send it " +
+                            "to WhatsApp as a video message."
+                    )
                 }
 
                 OutputFormat.RINGTONE -> {
-                    state = ConvertState.Working(8, "Extracting soundtrack\u2026")
-                    val outFile = File(exports, "$base-ringtone.mp3")
+                    state = ConvertState.Working(8, "Extracting AAC soundtrack\u2026")
+                    val outFile = File(exports, "$base-ringtone.m4a")
                     val conv = FfmpegUtils.extractRingtone(context, uri, outFile
                     ) { p -> state = ConvertState.Working(p.coerceIn(0, 95), "Extracting audio\u2026 ${p}%") }
                     if (!conv.success) {
@@ -134,7 +197,7 @@ fun ConvertScreen(navController: NavHostController) {
                     }
                     Session.lastOutput = outFile.absolutePath
                     Session.lastOutputFormat = settings.format
-                    state = ConvertState.Success(outFile, null, "Ringtone extracted \u2014 share it or set it as your sound.")
+                    state = ConvertState.Success(outFile, null, false, "Ringtone extracted \u2014 share it or set it as your sound.")
                 }
             }
         } catch (e: Exception) {
@@ -145,7 +208,7 @@ fun ConvertScreen(navController: NavHostController) {
     Box(Modifier.fillMaxSize().padding(22.dp), contentAlignment = Alignment.Center) {
         when (val s = state) {
             is ConvertState.Working -> WorkingView(s.progress, s.step)
-            is ConvertState.Success -> SuccessView(s, navController)
+            is ConvertState.Success -> SuccessView(s, navController, addLauncher)
             is ConvertState.Failure -> FailureView(s.message, navController)
         }
     }
@@ -191,7 +254,11 @@ private fun WorkingView(progress: Int, step: String) {
 }
 
 @Composable
-private fun SuccessView(s: ConvertState.Success, navController: NavHostController) {
+private fun SuccessView(
+    s: ConvertState.Success,
+    navController: NavHostController,
+    addLauncher: ManagedActivityResultLauncher<Intent, ActivityResult>
+) {
     val context = LocalContext.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -222,7 +289,7 @@ private fun SuccessView(s: ConvertState.Success, navController: NavHostControlle
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    if (s.file.extension == "mp3") Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
+                    if (s.file.extension == "m4a") Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(64.dp)
@@ -252,37 +319,34 @@ private fun SuccessView(s: ConvertState.Success, navController: NavHostControlle
                 }
             }
             Spacer(Modifier.height(10.dp))
-            GradientButton("RETRY INJECTION", Modifier.fillMaxWidth(0.85f)) {
-                scope.launch {
-                    retryInfo = "Re-injecting\u2026"
-                    val tray = Session.lastTray?.let { File(it) }
-                    val sticker = Session.lastOutput?.let { File(it) }
-                    if (tray == null || sticker == null || !tray.exists() || !sticker.exists()) {
-                        retryInfo = "Sticker files missing \u2014 convert again."
-                        return@launch
-                    }
-                    val res = withContext(Dispatchers.IO) {
-                        WhatsAppHandler.addStickerPack(
-                            context,
-                            Session.settings.packName,
-                            tray,
-                            listOf(Sticker(sticker, Session.settings.emojis))
-                        )
-                    }
-                    retryInfo = if (res.success) {
-                        val registered = withContext(Dispatchers.IO) {
-                            WhatsAppHandler.getStickerPacks(context).any { it.id == res.message }
-                        }
-                        Session.lastPackId = res.message
-                        if (registered) {
-                            "Injected \u2714 Pack is registered \u2014 check \u2295 \u2192 My Stickers in WhatsApp."
-                        } else {
-                            "Inserted but still not registered. Force-stop WhatsApp and check \u2295 \u2192 My Stickers."
-                        }
-                    } else {
-                        "Injection failed: ${res.message}"
+            if (s.pendingAdd) {
+                GradientButton("ADD TO WHATSAPP", Modifier.fillMaxWidth(0.85f)) {
+                    runCatching {
+                        addLauncher.launch(WhatsAppHandler.buildAddIntent(s.packId, Session.settings.packName))
+                    }.onFailure {
+                        retryInfo = "Couldn't open the WhatsApp add dialog. Is WhatsApp installed?"
                     }
                 }
+                Spacer(Modifier.height(10.dp))
+            } else {
+                GradientButton("ADD AGAIN", Modifier.fillMaxWidth(0.85f)) {
+                    scope.launch {
+                        val intent = withContext(Dispatchers.IO) {
+                            WhatsAppHandler.reAddIntent(context, s.packId, Session.settings.packName)
+                        }
+                        if (intent == null) {
+                            retryInfo = "Pack files are gone \u2014 convert the sticker again."
+                        } else {
+                            runCatching { addLauncher.launch(intent) }.onFailure {
+                                retryInfo = "Couldn't open the WhatsApp add dialog. Is WhatsApp installed?"
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            GradientButton("SHARE FILE", Modifier.fillMaxWidth(0.85f)) {
+                shareFile(context, s.file)
             }
             retryInfo?.let {
                 Spacer(Modifier.height(8.dp))
@@ -351,7 +415,7 @@ private fun shareFile(context: android.content.Context, file: File) {
     val uri = FileProvider.getUriForFile(context, "com.msj.stickerstudio.fileprovider", file)
     val mime = when (file.extension) {
         "webm" -> "video/webm"
-        "mp3" -> "audio/mpeg"
+        "m4a" -> "audio/mp4"
         "webp" -> "image/webp"
         "gif" -> "image/gif"
         else -> "*/*"
@@ -368,7 +432,7 @@ private fun shareFileTo(context: android.content.Context, file: File, packageNam
     val uri = FileProvider.getUriForFile(context, "com.msj.stickerstudio.fileprovider", file)
     val mime = when (file.extension) {
         "webm" -> "video/webm"
-        "mp3" -> "audio/mpeg"
+        "m4a" -> "audio/mp4"
         "webp" -> "image/webp"
         "gif" -> "image/gif"
         else -> "*/*"

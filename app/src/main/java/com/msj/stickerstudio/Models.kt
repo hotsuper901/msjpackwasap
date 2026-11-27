@@ -21,7 +21,7 @@ enum class OutputFormat(val label: String, val ext: String) {
     ANIMATED_WEBP("Animated WebP", ".webp"),
     GIF("GIF", ".gif"),
     MUSIC_STICKER("Music Sticker", ".webm"),
-    RINGTONE("Ringtone (MP3)", ".mp3")
+    RINGTONE("Ringtone (M4A)", ".m4a")
 }
 
 /** Conversion settings chosen in the editor. */

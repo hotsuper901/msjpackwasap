@@ -1,33 +1,37 @@
 package com.msj.stickerstudio
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
+import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.OpenableColumns
 import com.msj.stickerstudio.data.StickerContentProvider
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Wraps the WhatsApp sticker content-provider API.
- * Callbacks: onAlreadyExists -> close, onSuccess -> success, onFailure(reason) -> fail.
+ * WhatsApp sticker integration.
+ *
+ * The officially supported flow (and the one current WhatsApp versions accept)
+ * is: this app hosts the pack behind its own content provider, then fires
+ * `com.whatsapp.intent.action.ENABLE_STICKER_PACK` with the provider authority,
+ * pack id and pack name. WhatsApp shows its "Add pack?" dialog, then pulls the
+ * pack metadata and sticker WebP assets from our provider.
  */
 object WhatsAppHandler {
 
     const val CONTENT_PROVIDER_AUTHORITY = "com.whatsapp.stickerapp.provider"
+
+    const val ACTION_ENABLE_STICKER_PACK = "com.whatsapp.intent.action.ENABLE_STICKER_PACK"
+    private const val EXTRA_STICKER_PACK_ID = "sticker_pack_id"
+    private const val EXTRA_STICKER_PACK_AUTHORITY = "sticker_pack_authority"
+    private const val EXTRA_STICKER_PACK_NAME = "sticker_pack_name"
+
     private const val STICKER_PACK_IDENTIFIER_IN_QUERY = "sticker_pack_identifier"
     private const val STICKER_PACK_NAME_IN_QUERY = "sticker_pack_name"
     private const val STICKER_PACK_PUBLISHER_IN_QUERY = "sticker_pack_publisher"
     private const val STICKER_PACK_ICON_IN_QUERY = "sticker_pack_icon"
-    private const val STICKER_FILE_EMOJI_IN_QUERY = "sticker_emoji"
-    private const val STICKER_FILE_NAME_IN_QUERY = "sticker_file_name"
 
     private val stickerPackURI = Uri.parse("content://$CONTENT_PROVIDER_AUTHORITY/sticker_packs")
-    private val stickerDetailsURI = Uri.parse("content://$CONTENT_PROVIDER_AUTHORITY/sticker_pack_details")
 
     /** WhatsApp sticker packs support up to 30 stickers per pack. */
     private const val ADD_STICKER_MAX = 30
@@ -60,18 +64,28 @@ object WhatsAppHandler {
             "?"
         }
 
-    /** Builds a plain-text diagnostic for the injection step. */
+    /** Builds a plain-text diagnostic for the pack-add step. */
     fun diagnose(context: Context, identifier: String, trayFile: File, stickerFile: File): String {
-        val registered = getStickerPacks(context).any { it.id == identifier }
+        val registered = if (identifier.isNotEmpty()) {
+            getStickerPacks(context).any { it.id == identifier }
+        } else {
+            false
+        }
+        val stored = if (identifier.isNotEmpty()) {
+            PackStore.find(context, identifier) != null
+        } else {
+            false
+        }
         return buildString {
             appendLine("Pack registered in WhatsApp: ${if (registered) "YES" else "NO"}")
+            appendLine("Pack stored locally: ${if (stored) "YES" else "NO"}")
             appendLine("Tray icon: ${trayFile.length() / 1024} KB (${if (trayFile.exists()) "present" else "missing"})")
             appendLine("Sticker: ${stickerFile.length() / 1024} KB (${if (stickerFile.exists()) "present" else "missing"})")
             appendLine("WhatsApp v${whatsAppVersion(context)}")
         }
     }
 
-    /** Reads the sticker packs already registered inside WhatsApp. */
+    /** Reads the sticker packs already registered inside WhatsApp (best effort — may be empty on newer builds). */
     fun getStickerPacks(context: Context): List<StickerPack> {
         val packs = mutableListOf<StickerPack>()
         try {
@@ -96,14 +110,44 @@ object WhatsAppHandler {
     }
 
     /**
-     * Adds a pack to WhatsApp and inserts every sticker.
-     * trayIcon: 96x96 WebP file. stickers: WebP files 512x512.
+     * Packs this app created: WhatsApp's own listing when readable, otherwise
+     * the local registry (which is always current).
      */
-    fun addStickerPack(
+    fun getRegisteredPacks(context: Context): List<StickerPack> {
+        val fromWhatsApp = getStickerPacks(context)
+        if (fromWhatsApp.isNotEmpty()) return fromWhatsApp
+        return PackStore.load(context).map { r ->
+            StickerPack(
+                id = r.id,
+                name = r.name,
+                publisher = r.publisher,
+                iconUri = StickerContentProvider.buildTrayUri(r.id).toString()
+            )
+        }
+    }
+
+    data class AddResult(
+        val success: Boolean,
+        val message: String,
+        val packId: String? = null,
+        val intent: Intent? = null
+    )
+
+    /**
+     * Stages the pack behind our content provider, stores it in the local
+     * registry and returns the ENABLE_STICKER_PACK intent. Launch the intent
+     * to let WhatsApp show its confirmation dialog.
+     *
+     * trayIcon: 96x96 WebP file. stickers: WebP files (WhatsApp packs are WebP-only).
+     */
+    fun preparePack(
         context: Context,
         packName: String,
         trayIcon: File,
-        stickers: List<Sticker>
+        stickers: List<Sticker>,
+        animated: Boolean,
+        stickerTitle: String,
+        packId: String = java.util.UUID.randomUUID().toString()
     ): AddResult {
         try {
             if (!isWhatsAppInstalled(context)) {
@@ -116,58 +160,57 @@ object WhatsAppHandler {
                 return AddResult(false, "Tray icon is missing")
             }
 
-            val identifier = java.util.UUID.randomUUID().toString()
-            val trayUri = StickerContentProvider.buildTrayUri(identifier)
-
-            // Place assets where our content provider serves them from.
-            val targetTray = File(trayDir(context), "$identifier.webp")
+            // Stage assets where our content provider serves them from.
+            val targetTray = File(trayDir(context), "$packId.webp")
             trayIcon.copyTo(targetTray, overwrite = true)
-            val stickerTargets = stickers.map { s ->
-                val dir = stickerDir(context, identifier)
+
+            val records = mutableListOf<PackStore.StickerRecord>()
+            stickers.forEach { s ->
+                if (!s.file.exists() || s.file.length() == 0L) {
+                    return AddResult(false, "A sticker file is empty")
+                }
+                val dir = stickerDir(context, packId)
                 val target = File(dir, s.file.name)
                 s.file.copyTo(target, overwrite = true)
-                Sticker(target, s.emojis)
+                records += PackStore.StickerRecord(
+                    fileName = s.file.name,
+                    emojis = s.emojis.joinToString(","),
+                    title = stickerTitle.take(250)
+                )
             }
 
-            // 1) Register the pack
-            val packValues = android.content.ContentValues().apply {
-                put(STICKER_PACK_IDENTIFIER_IN_QUERY, identifier)
-                put(STICKER_PACK_NAME_IN_QUERY, packName)
-                put(STICKER_PACK_PUBLISHER_IN_QUERY, "M.S.J")
-                put(STICKER_PACK_ICON_IN_QUERY, trayUri.toString())
-            }
-            val packRes = context.contentResolver.insert(stickerPackURI, packValues)
-                ?: return AddResult(false, "WhatsApp rejected the pack")
+            PackStore.add(
+                context,
+                PackStore.PackRecord(
+                    id = packId,
+                    name = packName,
+                    publisher = "M.S.J",
+                    animated = animated,
+                    stickers = records
+                )
+            )
 
-            // 2) Register each sticker
-            for ((index, sticker) in stickerTargets.withIndex()) {
-                if (!sticker.file.exists() || sticker.file.length() == 0L) {
-                    return AddResult(false, "Sticker ${index + 1} is empty")
-                }
-                val stickerUri = StickerContentProvider.buildStickerUri(identifier, sticker.file.name)
-                val values = android.content.ContentValues().apply {
-                    put(STICKER_PACK_IDENTIFIER_IN_QUERY, identifier)
-                    put(STICKER_FILE_NAME_IN_QUERY, stickerUri.lastPathSegment)
-                    put(STICKER_FILE_EMOJI_IN_QUERY, sticker.emojis.joinToString(","))
-                }
-                val res = context.contentResolver.insert(stickerDetailsURI, values)
-                if (res == null) {
-                    return AddResult(false, "WhatsApp rejected sticker ${index + 1}")
-                }
-            }
-
-            // 3) Trigger the "added" broadcast so WhatsApp shows it immediately
-            val intent = android.content.Intent("com.whatsapp.intent.action.STICKER_PACK_ADDED")
-            intent.setPackage("com.whatsapp")
-            context.sendBroadcast(intent)
-
-            return AddResult(true, identifier)
+            val intent = buildAddIntent(packId, packName)
+            return AddResult(true, packId, packId, intent)
         } catch (e: Exception) {
-            return AddResult(false, e.message ?: "Unknown error while adding to WhatsApp")
+            return AddResult(false, e.message ?: "Unknown error while preparing the pack")
         }
     }
 
-    data class AddResult(val success: Boolean, val message: String)
+    /** Intent that makes WhatsApp show its "Add pack" confirmation dialog. */
+    fun buildAddIntent(packId: String, packName: String): Intent =
+        Intent(ACTION_ENABLE_STICKER_PACK).apply {
+            putExtra(EXTRA_STICKER_PACK_ID, packId)
+            putExtra(EXTRA_STICKER_PACK_AUTHORITY, StickerContentProvider.AUTHORITY)
+            putExtra(EXTRA_STICKER_PACK_NAME, packName)
+            setPackage("com.whatsapp")
+        }
+
+    /** Re-add intent for a pack we staged earlier; null if it's no longer stored. */
+    fun reAddIntent(context: Context, packId: String, packName: String): Intent? {
+        if (PackStore.find(context, packId) == null) return null
+        return buildAddIntent(packId, packName)
+    }
 
     /** Copies the content behind a URI into a local cache file. */
     fun copyUriToFile(context: Context, uri: Uri, target: File): Boolean =

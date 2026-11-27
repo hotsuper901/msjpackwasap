@@ -1,6 +1,7 @@
 package com.msj.stickerstudio
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegSessionCompleteCallback
@@ -12,7 +13,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * FFmpeg-powered converters. All jobs run through ffmpeg-kit (audio build).
+ * FFmpeg-powered converters. All jobs run through the maintained FFmpegKit fork
+ * (video variant: libwebp + libvpx + libvorbis + native encoders).
  * Progress callbacks receive [0..100].
  *
  * Quoting rule: ffmpeg-kit tokenizes the command on whitespace, so any value
@@ -31,7 +33,7 @@ object FfmpegUtils {
 
     /**
      * Converts the video into a WhatsApp sticker asset (animated WebP or GIF).
-     * Auto-shrinks (fps/quality) if the result exceeds the 1MB WhatsApp limit.
+     * Auto-shrinks (fps/quality/size) if the result exceeds the 1MB WhatsApp limit.
      */
     suspend fun convertToSticker(
         context: Context,
@@ -46,28 +48,32 @@ object FfmpegUtils {
         val input = resolveInput(context, inputUri)
             ?: return@withContext JobResult(false, "Could not read the selected video", null)
 
+        var sizeNow = size
         var fpsNow = fps
         var qualityNow = quality
         var attempt = 0
         var result: JobResult
         do {
-            val vf = buildStickerVf(size, fpsNow, format)
+            val vf = buildStickerVf(sizeNow, fpsNow, format)
             val cmd = when (format) {
                 OutputFormat.ANIMATED_WEBP ->
-                    "-y -i $input -vf $vf -loop 0 -quality $qualityNow -preset default ${fq(outFile.absolutePath)}"
+                    "-y -i $input -map 0:v:0 -an -vf $vf " +
+                        "-loop 0 -quality $qualityNow ${fq(outFile.absolutePath)}"
                 OutputFormat.GIF ->
-                    "-y -i $input -vf $vf -loop 0 ${fq(outFile.absolutePath)}"
+                    "-y -i $input -map 0:v:0 -an -vf $vf " +
+                        "-loop 0 ${fq(outFile.absolutePath)}"
                 else -> return@withContext JobResult(false, "Use the music sticker converter for this format", null)
             }
-            result = run(cmd, onProgress, outFile)
+            result = run(cmd, input, onProgress, outFile)
             attempt++
-            if (result.success && outFile.length() > 900_000 && fpsNow > 5) {
+            if (result.success && outFile.length() > 900_000 && attempt < 3) {
                 fpsNow = maxOf(5, fpsNow / 2)
                 qualityNow = maxOf(30, qualityNow - 25)
+                if (attempt == 2) sizeNow = 256
             } else {
                 break
             }
-        } while (attempt < 3)
+        } while (true)
         result
     }
 
@@ -82,8 +88,8 @@ object FfmpegUtils {
     }
 
     /**
-     * Music sticker: WebM (VP8 video + Opus audio). Keeps the sound of the clip —
-     * export/share it, or send it to WhatsApp as a video message.
+     * Music sticker: WebM (VP8 video + Vorbis audio). Keeps the sound of the clip —
+     * export/share it, or send it to WhatsApp as a video message that plays audio.
      */
     suspend fun convertToMusicSticker(
         context: Context,
@@ -100,19 +106,19 @@ object FfmpegUtils {
         val vf = "fps=$fps,scale=$size:$size:force_original_aspect_ratio=increase,crop=$size:$size"
         val cmd = if (withMusic) {
             "-y -i $input -map 0:v:0 -map 0:a:0? -vf $vf " +
-                "-c:v libvpx -b:v 1M -crf 10 -pix_fmt yuv420p -r $fps " +
-                "-c:a libopus -b:a 96k -shortest " +
+                "-c:v libvpx -crf 10 -b:v 0 -pix_fmt yuv420p -r $fps " +
+                "-c:a libvorbis -q:a 4 -shortest " +
                 "${fq(outFile.absolutePath)}"
         } else {
             "-y -i $input -map 0:v:0 -vf $vf " +
-                "-c:v libvpx -b:v 1M -crf 10 -pix_fmt yuv420p -r $fps -an " +
+                "-c:v libvpx -crf 10 -b:v 0 -pix_fmt yuv420p -r $fps -an " +
                 "${fq(outFile.absolutePath)}"
         }
 
-        run(cmd, onProgress, outFile)
+        run(cmd, input, onProgress, outFile)
     }
 
-    /** Extracts the soundtrack of the video as an MP3 ringtone. */
+    /** Extracts the soundtrack of the video as an AAC M4A ringtone. */
     suspend fun extractRingtone(
         context: Context,
         inputUri: Uri,
@@ -121,8 +127,8 @@ object FfmpegUtils {
     ): JobResult = withContext(Dispatchers.IO) {
         val input = resolveInput(context, inputUri)
             ?: return@withContext JobResult(false, "Could not read the selected video", null)
-        val cmd = "-y -i $input -vn -ac 2 -ar 44100 -b:a 192k -codec:a libmp3lame ${fq(outFile.absolutePath)}"
-        run(cmd, onProgress, outFile)
+        val cmd = "-y -i $input -map 0:a:0? -vn -ac 2 -ar 44100 -c:a aac -b:a 192k ${fq(outFile.absolutePath)}"
+        run(cmd, input, onProgress, outFile)
     }
 
     /** Converts a single frame into the 96x96 WebP tray icon for a pack. */
@@ -134,29 +140,44 @@ object FfmpegUtils {
     ): JobResult = withContext(Dispatchers.IO) {
         val input = resolveInput(context, inputUri)
             ?: return@withContext JobResult(false, "Could not read the selected video", null)
-        val cmd = "-y -ss $atSeconds -i $input -frames:v 1 " +
+        val cmd = "-y -ss $atSeconds -i $input -map 0:v:0 -frames:v 1 " +
             "-vf scale=96:96:force_original_aspect_ratio=increase,crop=96:96 " +
             "-quality 95 ${fq(outFile.absolutePath)}"
-        run(cmd, null, outFile)
+        run(cmd, input, null, outFile)
     }
 
     /** Copies the picked video to a plain cache file so FFmpeg always gets a vanilla path. */
     private fun resolveInput(context: Context, inputUri: Uri): String? {
-        val tmp = File(context.cacheDir, "in_${System.currentTimeMillis()}.mp4")
+        val tmp = File(context.cacheDir, "in_${System.currentTimeMillis()}")
         return if (WhatsAppHandler.copyUriToFile(context, inputUri, tmp)) tmp.absolutePath else null
+    }
+
+    private fun probeDurationMs(path: String): Long = try {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(path)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+        } finally {
+            retriever.release()
+        }
+    } catch (_: Exception) {
+        0L
     }
 
     private suspend fun run(
         command: String,
+        inputPath: String,
         onProgress: ((Int) -> Unit)?,
         outFile: File
     ): JobResult {
+        val durationMs = probeDurationMs(inputPath)
         var lastPct = 0
         val latch = java.util.concurrent.CountDownLatch(1)
         var returnCode: ReturnCode? = null
         val logBuf = java.util.Collections.synchronizedList(mutableListOf<String>())
 
-        // 6.0.LTS signature: (command, completeCallback, logCallback, statisticsCallback)
+        // Signature: (command, completeCallback, logCallback, statisticsCallback)
         FFmpegKit.executeAsync(
             command,
             FFmpegSessionCompleteCallback { session ->
@@ -171,7 +192,11 @@ object FfmpegUtils {
                 }
             },
             StatisticsCallback { s ->
-                val pct = s.time.toInt().coerceIn(0, 100)
+                val pct = if (durationMs > 0) {
+                    (s.time * 100 / durationMs).toInt().coerceIn(0, 100)
+                } else {
+                    s.time.toInt().coerceIn(0, 100)
+                }
                 if (pct != lastPct) {
                     lastPct = pct
                     onProgress?.invoke(pct)

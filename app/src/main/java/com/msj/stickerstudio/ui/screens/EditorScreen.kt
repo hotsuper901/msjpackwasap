@@ -325,9 +325,9 @@ private fun FormatRow(format: OutputFormat, selected: Boolean, onSelect: () -> U
     }
     val desc = when (format) {
         OutputFormat.ANIMATED_WEBP -> "Animated sticker pack \u2192 WhatsApp sticker keyboard"
-        OutputFormat.GIF -> "Animated GIF \u2192 WhatsApp sticker keyboard"
-        OutputFormat.MUSIC_STICKER -> "WebM with sound \u2192 share or send as video"
-        OutputFormat.RINGTONE -> "MP3 soundtrack from the video"
+        OutputFormat.GIF -> "Animated GIF for sharing \u00B7 WebP twin added to WhatsApp"
+        OutputFormat.MUSIC_STICKER -> "WebM with sound (VP8 + Vorbis) \u2192 share or send as video"
+        OutputFormat.RINGTONE -> "M4A (AAC) soundtrack from the video"
     }
     Row(
         modifier = Modifier

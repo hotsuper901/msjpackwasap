@@ -33,7 +33,7 @@ fun PacksScreen() {
     var refreshKey by remember { mutableStateOf(0) }
 
     LaunchedEffect(refreshKey) {
-        packs = WhatsAppHandler.getStickerPacks(context)
+        packs = WhatsAppHandler.getRegisteredPacks(context)
         exports = WhatsAppHandler.exportsDir(context).listFiles()
             ?.filter { it.isFile }
             ?.sortedByDescending { it.lastModified() }
@@ -157,7 +157,7 @@ private fun ExportRow(file: File) {
         "WEBP" -> Magenta
         "GIF" -> Cyan
         "WEBM" -> Gold
-        "MP3" -> Violet
+        "M4A" -> Violet
         else -> TextDim
     }
     Row(
