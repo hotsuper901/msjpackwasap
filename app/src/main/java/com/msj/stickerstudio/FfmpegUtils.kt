@@ -68,7 +68,7 @@ object FfmpegUtils {
     }
 
     /**
-     * Music sticker: WebM (VP9 video + Opus audio). Keeps the sound of the clip —
+     * Music sticker: WebM (VP8 video + Opus audio). Keeps the sound of the clip —
      * export/share it, or send it to WhatsApp as a video message.
      */
     suspend fun convertToMusicSticker(
@@ -85,13 +85,13 @@ object FfmpegUtils {
 
         val vf = "fps=$fps,scale=$size:$size:force_original_aspect_ratio=increase,crop=$size:$size"
         val cmd = if (withMusic) {
-            "-y -i $input -an -vf $vf -c:v libvpx-vp9 -b:v 900k -r $fps " +
-                "-deadline good -cpu-used 4 -pix_fmt yuv420p " +
-                "-i $input -map 0:v -map 1:a? -c:a libopus -b:a 96k -shortest " +
+            "-y -i $input -map 0:v:0 -map 0:a:0? -vf $vf " +
+                "-c:v libvpx -b:v 1M -crf 10 -pix_fmt yuv420p -r $fps " +
+                "-c:a libopus -b:a 96k -shortest " +
                 "${fq(outFile.absolutePath)}"
         } else {
-            "-y -i $input -an -vf $vf -c:v libvpx-vp9 -b:v 900k -r $fps " +
-                "-deadline good -cpu-used 4 -pix_fmt yuv420p " +
+            "-y -i $input -map 0:v:0 -vf $vf " +
+                "-c:v libvpx -b:v 1M -crf 10 -pix_fmt yuv420p -r $fps -an " +
                 "${fq(outFile.absolutePath)}"
         }
 
@@ -141,6 +141,7 @@ object FfmpegUtils {
         var lastPct = 0
         val latch = java.util.concurrent.CountDownLatch(1)
         var returnCode: ReturnCode? = null
+        val logBuf = java.util.Collections.synchronizedList(mutableListOf<String>())
 
         // 6.0.LTS signature: (command, completeCallback, logCallback, statisticsCallback)
         FFmpegKit.executeAsync(
@@ -149,7 +150,13 @@ object FfmpegUtils {
                 returnCode = session.returnCode
                 latch.countDown()
             },
-            LogCallback { },
+            LogCallback { log ->
+                val line = log.message ?: return@LogCallback
+                synchronized(logBuf) {
+                    if (logBuf.size > 150) logBuf.removeAt(0)
+                    logBuf.add(line)
+                }
+            },
             StatisticsCallback { s ->
                 val pct = s.time.toInt().coerceIn(0, 100)
                 if (pct != lastPct) {
@@ -165,7 +172,18 @@ object FfmpegUtils {
         ) {
             JobResult(true, "Done", outFile)
         } else {
-            JobResult(false, "Conversion failed (code $returnCode). Try another format or quality.", null)
+            val tail = synchronized(logBuf) { logBuf.takeLast(6) }
+                .joinToString("\n")
+                .take(700)
+            JobResult(
+                false,
+                if (tail.isBlank()) {
+                    "Conversion failed (code $returnCode). Try another format or quality."
+                } else {
+                    "Conversion failed (code $returnCode):\n$tail"
+                },
+                null
+            )
         }
     }
 }
