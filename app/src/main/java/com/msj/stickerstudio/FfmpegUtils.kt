@@ -2,9 +2,9 @@ package com.msj.stickerstudio
 
 import android.content.Context
 import android.net.Uri
-import com.arthenica.ffmpegkit.ExecuteCallback
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegKitConfig
+import com.arthenica.ffmpegkit.FFmpegSessionCompleteCallback
 import com.arthenica.ffmpegkit.LogCallback
 import com.arthenica.ffmpegkit.ReturnCode
 import com.arthenica.ffmpegkit.StatisticsCallback
@@ -139,20 +139,30 @@ object FfmpegUtils {
         outFile: File
     ): JobResult {
         var lastPct = 0
-        val session = FFmpegKit.executeAsync(
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var returnCode: ReturnCode? = null
+
+        // 6.0.LTS signature: (command, completeCallback, logCallback, statisticsCallback)
+        FFmpegKit.executeAsync(
             command,
+            FFmpegSessionCompleteCallback { session ->
+                returnCode = session.returnCode
+                latch.countDown()
+            },
+            LogCallback { },
             StatisticsCallback { s ->
                 val pct = s.time.toInt().coerceIn(0, 100)
                 if (pct != lastPct) {
                     lastPct = pct
                     onProgress?.invoke(pct)
                 }
-            },
-            LogCallback { },
-            ExecuteCallback { }
+            }
         )
-        val returnCode = session.returnCode
-        return if (ReturnCode.isSuccess(returnCode) && outFile.exists() && outFile.length() > 0) {
+        latch.await()
+
+        return if (returnCode != null && ReturnCode.isSuccess(returnCode!!) &&
+            outFile.exists() && outFile.length() > 0
+        ) {
             JobResult(true, "Done", outFile)
         } else {
             JobResult(false, "Conversion failed (code $returnCode). Try another format or quality.", null)
