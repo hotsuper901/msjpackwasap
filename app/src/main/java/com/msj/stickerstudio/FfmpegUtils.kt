@@ -2,9 +2,12 @@ package com.msj.stickerstudio
 
 import android.content.Context
 import android.net.Uri
+import com.arthenica.ffmpegkit.ExecuteCallback
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegKitConfig
+import com.arthenica.ffmpegkit.LogCallback
 import com.arthenica.ffmpegkit.ReturnCode
+import com.arthenica.ffmpegkit.StatisticsCallback
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -138,15 +141,15 @@ object FfmpegUtils {
         var lastPct = 0
         val session = FFmpegKit.executeAsync(
             command,
-            { s ->
+            StatisticsCallback { s ->
                 val pct = s.time.toInt().coerceIn(0, 100)
                 if (pct != lastPct) {
                     lastPct = pct
                     onProgress?.invoke(pct)
                 }
             },
-            { },
-            { }
+            LogCallback { },
+            ExecuteCallback { }
         )
         val returnCode = session.returnCode
         return if (ReturnCode.isSuccess(returnCode) && outFile.exists() && outFile.length() > 0) {

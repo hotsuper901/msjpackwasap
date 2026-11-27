@@ -81,7 +81,8 @@ class StickerContentProvider : ContentProvider() {
         selection: String?,
         selectionArgs: Array<out String>?,
         sortOrder: String?
-    ): Cursor? = when (uriMatcher.match(uri)) {
+    ): Cursor? {
+        return when (uriMatcher.match(uri)) {
         MATCHER_METADATA -> {
             val cursor = MatrixCursor(arrayOf("metadata"))
             cursor.addRow(arrayOf<Any>("metadata"))
@@ -111,6 +112,7 @@ class StickerContentProvider : ContentProvider() {
         }
 
         else -> throw IllegalArgumentException("Unsupported URI: $uri")
+        }
     }
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null

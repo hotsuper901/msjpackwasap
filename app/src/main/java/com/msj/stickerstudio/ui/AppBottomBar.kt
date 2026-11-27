@@ -6,6 +6,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AddCircle
+import androidx.compose.material.icons.rounded.Collections
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Rounded
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -34,10 +40,10 @@ private data class BarItem(val route: String, val label: String, val icon: Image
 @Composable
 fun AppBottomBar(navController: NavHostController, currentRoute: String?) {
     val items = listOf(
-        BarItem(Routes.HOME, "Home", androidx.compose.material.icons.Icons.Rounded.Home),
-        BarItem(Routes.EDITOR, "Create", androidx.compose.material.icons.Icons.Rounded.AddCircle),
-        BarItem(Routes.PACKS, "Packs", androidx.compose.material.icons.Icons.Rounded.Collections),
-        BarItem(Routes.ABOUT, "About", androidx.compose.material.icons.Icons.Rounded.Info)
+        BarItem(Routes.HOME, "Home", Icons.Rounded.Home),
+        BarItem(Routes.EDITOR, "Create", Icons.Rounded.AddCircle),
+        BarItem(Routes.PACKS, "Packs", Icons.Rounded.Collections),
+        BarItem(Routes.ABOUT, "About", Icons.Rounded.Info)
     )
 
     NavigationBar(
