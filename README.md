@@ -17,7 +17,7 @@ Dark nebula UI with animated gradient background, glass cards, and full control 
 |---|---|
 | Language | Kotlin |
 | UI | Jetpack Compose + Material 3 |
-| Video engine | FFmpeg (ffmpeg-kit, audio build) |
+| Video engine | FFmpeg (ffmpeg-kit 6.0.LTS, full build) |
 | WhatsApp integration | Official sticker content-provider API (`com.whatsapp.stickerapp.provider`) |
 | Build | Gradle 8.2, AGP 8.2.2, GitHub Actions |
 

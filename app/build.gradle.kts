@@ -93,8 +93,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // FFmpeg (audio build: video decode/encode + opus/vorbis audio for music stickers)
-    implementation("com.arthenica:ffmpeg-kit-audio:6.0-2")
+    // FFmpeg full build: libwebp (stickers) + libvpx-vp9 (music stickers)
+    // + libopus + libmp3lame (ringtone) — every encoder the app uses.
+    implementation("com.arthenica:ffmpeg-kit-full:6.0.LTS")
 
     // Animated WebP / GIF preview rendering
     implementation("io.coil-kt:coil-compose:2.5.0")
