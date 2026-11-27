@@ -28,6 +28,9 @@ import com.msj.stickerstudio.ui.GradientButton
 import com.msj.stickerstudio.ui.Routes
 import com.msj.stickerstudio.ui.theme.*
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private sealed interface ConvertState {
     data class Working(val progress: Int, val step: String) : ConvertState
@@ -80,12 +83,17 @@ fun ConvertScreen(navController: NavHostController) {
                         listOf(Sticker(stickerFile, settings.emojis))
                     )
                     if (!added.success) {
-                        state = ConvertState.Failure(added.message)
+                        state = ConvertState.Failure(
+                            "Conversion worked but WhatsApp rejected the pack:\n${added.message}\n\n" +
+                                WhatsAppHandler.diagnose(context, "", trayIcon, stickerFile)
+                        )
                         return@LaunchedEffect
                     }
                     val registered = WhatsAppHandler.getStickerPacks(context)
                         .any { it.id == added.message }
                     Session.lastOutput = stickerFile.absolutePath
+                    Session.lastTray = trayIcon.absolutePath
+                    Session.lastPackId = added.message
                     Session.lastOutputFormat = settings.format
                     state = ConvertState.Success(
                         stickerFile,
@@ -94,8 +102,8 @@ fun ConvertScreen(navController: NavHostController) {
                             "Added to WhatsApp \u2714\nOpen a chat \u2192 sticker picker \u2192 \u2295 \u2192 My Stickers.\n" +
                                 "If it's not there yet, force-stop WhatsApp once and reopen."
                         } else {
-                            "WhatsApp didn't register the pack yet.\nForce-stop WhatsApp once and tap OPEN WHATSAPP \u2014 " +
-                                "then re-check under \u2295 \u2192 My Stickers."
+                            "Pack inserted but WhatsApp didn't register it.\nTap RETRY INJECTION, then force-stop " +
+                                "WhatsApp once and check \u2295 \u2192 My Stickers."
                         }
                     )
                 }
@@ -231,6 +239,8 @@ private fun SuccessView(s: ConvertState.Success, navController: NavHostControlle
         Spacer(Modifier.height(24.dp))
 
         if (s.packId != null) {
+            val scope = rememberCoroutineScope()
+            var retryInfo by remember { mutableStateOf<String?>(null) }
             GradientButton("OPEN WHATSAPP", Modifier.fillMaxWidth(0.85f)) {
                 runCatching {
                     context.startActivity(
@@ -240,6 +250,49 @@ private fun SuccessView(s: ConvertState.Success, navController: NavHostControlle
                         }
                     )
                 }
+            }
+            Spacer(Modifier.height(10.dp))
+            GradientButton("RETRY INJECTION", Modifier.fillMaxWidth(0.85f)) {
+                scope.launch {
+                    retryInfo = "Re-injecting\u2026"
+                    val tray = Session.lastTray?.let { File(it) }
+                    val sticker = Session.lastOutput?.let { File(it) }
+                    if (tray == null || sticker == null || !tray.exists() || !sticker.exists()) {
+                        retryInfo = "Sticker files missing \u2014 convert again."
+                        return@launch
+                    }
+                    val res = withContext(Dispatchers.IO) {
+                        WhatsAppHandler.addStickerPack(
+                            context,
+                            Session.settings.packName,
+                            tray,
+                            listOf(Sticker(sticker, Session.settings.emojis))
+                        )
+                    }
+                    retryInfo = if (res.success) {
+                        val registered = withContext(Dispatchers.IO) {
+                            WhatsAppHandler.getStickerPacks(context).any { it.id == res.message }
+                        }
+                        Session.lastPackId = res.message
+                        if (registered) {
+                            "Injected \u2714 Pack is registered \u2014 check \u2295 \u2192 My Stickers in WhatsApp."
+                        } else {
+                            "Inserted but still not registered. Force-stop WhatsApp and check \u2295 \u2192 My Stickers."
+                        }
+                    } else {
+                        "Injection failed: ${res.message}"
+                    }
+                }
+            }
+            retryInfo?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    it,
+                    color = Cyan,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 17.sp
+                )
             }
             Spacer(Modifier.height(12.dp))
         } else {

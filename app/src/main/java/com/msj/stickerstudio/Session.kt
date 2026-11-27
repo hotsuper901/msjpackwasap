@@ -8,5 +8,7 @@ object Session {
     var inputName: String = "video"
     var settings: ConvertSettings = ConvertSettings()
     var lastOutput: String? = null
+    var lastTray: String? = null
+    var lastPackId: String? = null
     var lastOutputFormat: OutputFormat = OutputFormat.ANIMATED_WEBP
 }

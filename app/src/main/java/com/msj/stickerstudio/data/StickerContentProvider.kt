@@ -40,11 +40,11 @@ class StickerContentProvider : ContentProvider() {
 
         fun buildTrayUri(packId: String): Uri =
             Uri.Builder().scheme("content").authority(AUTHORITY)
-                .appendPath("tray").appendPath(packId).build()
+                .appendPath("sticker_pack_tray_icon").appendPath(packId).build()
 
         fun buildStickerUri(packId: String, fileName: String): Uri =
             Uri.Builder().scheme("content").authority(AUTHORITY)
-                .appendPath("sticker").appendPath(packId).appendPath(fileName).build()
+                .appendPath("stickers_asset").appendPath(packId).appendPath(fileName).build()
     }
 
     private val uriMatcher = UriMatcher(UriMatcher.NO_MATCH).apply {

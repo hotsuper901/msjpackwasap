@@ -31,7 +31,7 @@ object FfmpegUtils {
 
     /**
      * Converts the video into a WhatsApp sticker asset (animated WebP or GIF).
-     * No audio in the image asset — the music lives in the paired track export.
+     * Auto-shrinks (fps/quality) if the result exceeds the 1MB WhatsApp limit.
      */
     suspend fun convertToSticker(
         context: Context,
@@ -46,24 +46,39 @@ object FfmpegUtils {
         val input = resolveInput(context, inputUri)
             ?: return@withContext JobResult(false, "Could not read the selected video", null)
 
-        // Palette pipeline: side chain palettegen + paletteuse with Bayer dithering.
-        val vf = "fps=$fps," +
+        var fpsNow = fps
+        var qualityNow = quality
+        var attempt = 0
+        var result: JobResult
+        do {
+            val vf = buildStickerVf(size, fpsNow, format)
+            val cmd = when (format) {
+                OutputFormat.ANIMATED_WEBP ->
+                    "-y -i $input -vf $vf -loop 0 -quality $qualityNow -preset default ${fq(outFile.absolutePath)}"
+                OutputFormat.GIF ->
+                    "-y -i $input -vf $vf -loop 0 ${fq(outFile.absolutePath)}"
+                else -> return@withContext JobResult(false, "Use the music sticker converter for this format", null)
+            }
+            result = run(cmd, onProgress, outFile)
+            attempt++
+            if (result.success && outFile.length() > 900_000 && fpsNow > 5) {
+                fpsNow = maxOf(5, fpsNow / 2)
+                qualityNow = maxOf(30, qualityNow - 25)
+            } else {
+                break
+            }
+        } while (attempt < 3)
+        result
+    }
+
+    /** Palette pipeline: side chain palettegen + paletteuse with Bayer dithering. */
+    private fun buildStickerVf(size: Int, fps: Int, format: OutputFormat): String {
+        val padColor = if (format == OutputFormat.GIF) "0x000000" else "0x00000000"
+        return "fps=$fps," +
             "scale='if(gt(iw,ih),$size,-2)':'if(gt(iw,ih),-2,$size)':flags=lanczos," +
-            "pad=$size:$size:(ow-iw)/2:(oh-ih)/2:0x00000000," +
+            "pad=$size:$size:(ow-iw)/2:(oh-ih)/2:$padColor," +
             "split[s0][s1];[s0]palettegen=stats_mode=diff[p];" +
             "[s1][p]paletteuse=dither=bayer:bayer_scale=3"
-
-        val cmd = when (format) {
-            OutputFormat.ANIMATED_WEBP ->
-                "-y -i $input -vf $vf -loop 0 -quality $quality -preset default ${fq(outFile.absolutePath)}"
-            OutputFormat.GIF -> {
-                val vfGif = vf.replace("0x00000000", "0x000000")
-                "-y -i $input -vf $vfGif -loop 0 ${fq(outFile.absolutePath)}"
-            }
-            else -> return@withContext JobResult(false, "Use the music sticker converter for this format", null)
-        }
-
-        run(cmd, onProgress, outFile)
     }
 
     /**

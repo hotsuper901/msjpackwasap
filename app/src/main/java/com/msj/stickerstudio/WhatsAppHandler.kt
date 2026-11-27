@@ -53,6 +53,24 @@ object WhatsAppHandler {
             false
         }
 
+    fun whatsAppVersion(context: Context): String =
+        try {
+            context.packageManager.getPackageInfo("com.whatsapp", 0).versionName ?: "?"
+        } catch (_: Exception) {
+            "?"
+        }
+
+    /** Builds a plain-text diagnostic for the injection step. */
+    fun diagnose(context: Context, identifier: String, trayFile: File, stickerFile: File): String {
+        val registered = getStickerPacks(context).any { it.id == identifier }
+        return buildString {
+            appendLine("Pack registered in WhatsApp: ${if (registered) "YES" else "NO"}")
+            appendLine("Tray icon: ${trayFile.length() / 1024} KB (${if (trayFile.exists()) "present" else "missing"})")
+            appendLine("Sticker: ${stickerFile.length() / 1024} KB (${if (stickerFile.exists()) "present" else "missing"})")
+            appendLine("WhatsApp v${whatsAppVersion(context)}")
+        }
+    }
+
     /** Reads the sticker packs already registered inside WhatsApp. */
     fun getStickerPacks(context: Context): List<StickerPack> {
         val packs = mutableListOf<StickerPack>()
