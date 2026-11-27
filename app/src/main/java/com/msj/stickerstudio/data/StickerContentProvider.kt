@@ -3,6 +3,7 @@ package com.msj.stickerstudio.data
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.UriMatcher
+import android.content.res.AssetFileDescriptor
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -69,6 +70,27 @@ class StickerContentProvider : ContentProvider() {
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_WRITE)
             } else {
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor? {
+        val file = resolveBinaryFile(uri) ?: return null
+        return try {
+            if (mode.contains("w")) {
+                AssetFileDescriptor(
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_WRITE),
+                    0,
+                    file.length()
+                )
+            } else {
+                AssetFileDescriptor(
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY),
+                    0,
+                    file.length()
+                )
             }
         } catch (_: Exception) {
             null

@@ -83,9 +83,21 @@ fun ConvertScreen(navController: NavHostController) {
                         state = ConvertState.Failure(added.message)
                         return@LaunchedEffect
                     }
+                    val registered = WhatsAppHandler.getStickerPacks(context)
+                        .any { it.id == added.message }
                     Session.lastOutput = stickerFile.absolutePath
                     Session.lastOutputFormat = settings.format
-                    state = ConvertState.Success(stickerFile, added.message, "Added to WhatsApp \u2014 open the sticker keyboard and find \u201C${settings.packName}\u201D.")
+                    state = ConvertState.Success(
+                        stickerFile,
+                        added.message,
+                        if (registered) {
+                            "Added to WhatsApp \u2714\nOpen a chat \u2192 sticker picker \u2192 \u2295 \u2192 My Stickers.\n" +
+                                "If it's not there yet, force-stop WhatsApp once and reopen."
+                        } else {
+                            "WhatsApp didn't register the pack yet.\nForce-stop WhatsApp once and tap OPEN WHATSAPP \u2014 " +
+                                "then re-check under \u2295 \u2192 My Stickers."
+                        }
+                    )
                 }
 
                 OutputFormat.MUSIC_STICKER -> {
